@@ -1,7 +1,7 @@
 #include "vm.h"
 #include "asm.h"
 #include "dvm_io.h"
-#include <asm-generic/errno-base.h>
+#include "linker.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -11,112 +11,106 @@ void vm_run(uint8_t *bytecode, size_t stack_size);
 static void usage(const char *argv0) {
     fprintf(stderr,
         "Usage:\n"
-        "  %s run   <file.dvm>      — load and execute a .dvm binary\n"
-        "  %s asm   <file.s> [out]  — assemble source to .dvm (default: out.dvm)\n"
-        "  %s dump  <file.dvm>      — print section info\n",
-        argv0, argv0, argv0);
+        "  %s asm   <file.s> [out.dvm]          assemble to object/executable\n"
+        "  %s link  <a.dvm> <b.dvm> ... -o out  link objects to executable\n"
+        "  %s run   <file.dvm>                  load and execute\n"
+        "  %s dump  <file.dvm>                  print section/symbol info\n",
+        argv0,argv0,argv0,argv0);
     exit(1);
 }
 
-// ─── run ──────────────────────────────────────────────────────────────────────
+static char *read_file(const char *path) {
+    FILE *f=fopen(path,"r"); if(!f){perror(path);return NULL;}
+    fseek(f,0,SEEK_END); long sz=ftell(f); rewind(f);
+    char *buf=malloc((size_t)sz+1);
+    fread(buf,1,(size_t)sz,f); buf[sz]=0; fclose(f);
+    return buf;
+}
+
+static int cmd_asm(int argc, char **argv) {
+    // dvm asm <src> [out]
+    if (argc < 1) { fputs("asm: need source file\n",stderr); return 1; }
+    const char *src_path = argv[0];
+    const char *out_path = (argc>=2) ? argv[1] : "out.dvm";
+
+    char *src=read_file(src_path); if(!src) return 1;
+    AsmCtx ctx; if(!asm_compile(src,&ctx)){free(src);return 1;} free(src);
+
+    DvmProg prog; asm_to_prog(&ctx,&prog);
+    if(!dvm_write_file(out_path,&prog)) return 1;
+
+    // Count extern symbols
+    size_t nexterns=0;
+    for (size_t i=0;i<prog.nsyms;i++)
+        if (prog.syms[i].flags==DVM_SYM_EXTERN) nexterns++;
+
+    printf("wrote %s  (cnst=%zu data=%zu code=%zu syms=%zu rels=%zu externs=%zu)\n",
+           out_path, prog.cnst_len,prog.data_len,prog.code_len,
+           prog.nsyms,prog.nrels,nexterns);
+    return 0;
+}
+
+static int cmd_link(int argc, char **argv) {
+    // dvm link <obj1> <obj2> ... -o <out>
+    const char *out_path = "out.dvm";
+    const char *inputs[64]; size_t ninputs=0;
+    for (int i=0; i<argc; i++) {
+        if (!strcmp(argv[i],"-o")) { if(i+1<argc) out_path=argv[++i]; }
+        else inputs[ninputs++] = argv[i];
+    }
+    if (!ninputs) { fputs("link: no input files\n",stderr); return 1; }
+    if (!dvm_link_files(inputs,ninputs,out_path)) return 1;
+    printf("linked %s\n",out_path);
+    return 0;
+}
 
 static int cmd_run(const char *path) {
     DvmLoaded loaded;
-    if (!dvm_load_file(path, &loaded)) {
-        fprintf(stderr, "dvm: failed to load '%s'\n", path);
-        return 1;
+    if (!dvm_load_file(path,&loaded)) {
+        fprintf(stderr,"run: failed to load '%s'\n",path); return 1;
     }
-    vm_run(loaded.code, 1 << 20);  // 1MB stack
+    vm_run(loaded.code, 1<<20);
     dvm_unload(&loaded);
     return 0;
 }
 
-// ─── asm ──────────────────────────────────────────────────────────────────────
-
-static char *read_file(const char *path) {
-    FILE *f = fopen(path, "r");
-    if (!f) { perror(path); return NULL; }
-    fseek(f, 0, SEEK_END);
-    long sz = ftell(f);
-    rewind(f);
-    char *buf = malloc((size_t)sz + 1);
-    if(fread(buf, 1, (size_t)sz, f) != (size_t)sz) return NULL;
-    buf[sz] = 0;
-    fclose(f);
-    return buf;
-}
-
-static int cmd_asm(const char *src_path, const char *out_path) {
-    char *src = read_file(src_path);
-    if (!src) return 1;
-
-    AsmCtx ctx;
-    if (!asm_compile(src, &ctx)) {
-        free(src);
-        return 1;
-    }
-    free(src);
-
-    DvmProg prog;
-    asm_to_prog(&ctx, &prog);
-
-    if (!dvm_write_file(out_path, &prog)) return 1;
-
-    printf("wrote %s  (cnst=%zu data=%zu code=%zu syms=%zu rels=%zu)\n",
-           out_path,
-           prog.cnst_len, prog.data_len, prog.code_len,
-           prog.nsyms, prog.nrels);
-    return 0;
-}
-
-// ─── dump ─────────────────────────────────────────────────────────────────────
-
 static const char *sec_name(DvmSection s) {
-    switch(s) {
-    case DVM_SEC_CNST: return "cnst";
-    case DVM_SEC_DATA: return "data";
-    case DVM_SEC_CODE: return "code";
-    default:           return "?";
-    }
+    switch(s){ case DVM_SEC_CNST: return "cnst"; case DVM_SEC_DATA: return "data";
+               case DVM_SEC_CODE: return "code"; default: return "none"; }
+}
+static const char *sym_flag(uint8_t f) {
+    switch(f){ case DVM_SYM_GLOBAL: return "global"; case DVM_SYM_EXTERN: return "extern";
+               default: return "local"; }
 }
 
 static int cmd_dump(const char *path) {
-    DvmProg prog;
-    if (!dvm_read_file(path, &prog)) return 1;
-
-    printf("file:   %s\n", path);
-    printf("cnst:   %zu bytes\n", prog.cnst_len);
-    printf("data:   %zu bytes\n", prog.data_len);
-    printf("code:   %zu bytes\n", prog.code_len);
-    printf("syms:   %zu\n", prog.nsyms);
-    for (size_t i = 0; i < prog.nsyms; i++) {
-        const DvmSym *s = &prog.syms[i];
-        printf("  [%zu] %-20s  %s+0x%x\n",
-               i, s->name, sec_name(s->section), s->offset);
+    DvmProg prog; if(!dvm_read_file(path,&prog)) return 1;
+    printf("file:  %s\n",path);
+    printf("cnst:  %zu bytes\ndata:  %zu bytes\ncode:  %zu bytes\n",
+           prog.cnst_len,prog.data_len,prog.code_len);
+    printf("syms:  %zu\n",prog.nsyms);
+    for (size_t i=0;i<prog.nsyms;i++) {
+        const DvmSym *s=&prog.syms[i];
+        printf("  [%2zu] %-8s %-8s %s+0x%x\n",
+               i,sym_flag(s->flags),sec_name(s->section),sec_name(s->section),s->offset);
+        printf("       %s\n",s->name);
     }
-    printf("rels:   %zu\n", prog.nrels);
-    for (size_t i = 0; i < prog.nrels; i++) {
-        const DvmRel *r = &prog.rels[i];
-        printf("  [%zu] code+0x%04x  →  %s+0x%x\n",
-               i, r->code_offset, sec_name(r->section), r->sym_offset);
+    printf("rels:  %zu\n",prog.nrels);
+    for (size_t i=0;i<prog.nrels;i++) {
+        const DvmRel *r=&prog.rels[i];
+        const char *sname=(r->sym_index<prog.nsyms)?prog.syms[r->sym_index].name:"?";
+        printf("  [%2zu] code+0x%04x  →  %s\n",i,r->code_offset,sname);
     }
-
     dvm_prog_free(&prog);
     return 0;
 }
 
-// ─── main ─────────────────────────────────────────────────────────────────────
-
 int main(int argc, char **argv) {
-    if (argc < 3) usage(argv[0]);
-
-    if (!strcmp(argv[1], "run"))  return cmd_run(argv[2]);
-    if (!strcmp(argv[1], "dump")) return cmd_dump(argv[2]);
-    if (!strcmp(argv[1], "asm")) {
-        const char *out = (argc >= 4) ? argv[3] : "out.dvm";
-        return cmd_asm(argv[2], out);
-    }
-
-    fprintf(stderr, "dvm: unknown command '%s'\n", argv[1]);
+    if (argc<3) usage(argv[0]);
+    if (!strcmp(argv[1],"asm"))  return cmd_asm (argc-2,argv+2);
+    if (!strcmp(argv[1],"link")) return cmd_link(argc-2,argv+2);
+    if (!strcmp(argv[1],"run"))  return cmd_run (argv[2]);
+    if (!strcmp(argv[1],"dump")) return cmd_dump(argv[2]);
+    fprintf(stderr,"dvm: unknown command '%s'\n",argv[1]);
     usage(argv[0]);
 }
