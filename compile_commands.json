@@ -1,0 +1,164 @@
+[
+  {
+    "arguments": [
+      "/usr/bin/cc",
+      "-O2",
+      "-std=gnu11",
+      "-Wall",
+      "-Wno-unused-function",
+      "-Wno-unused-but-set-variable",
+      "-Iinc",
+      "-c",
+      "-o",
+      "bin/objs/asm.o",
+      "src/asm.c"
+    ],
+    "directory": "/home/luks/langauge/dvm",
+    "file": "/home/luks/langauge/dvm/src/asm.c",
+    "output": "/home/luks/langauge/dvm/bin/objs/asm.o"
+  },
+  {
+    "arguments": [
+      "/usr/bin/cc",
+      "-O2",
+      "-std=gnu11",
+      "-Wall",
+      "-Wno-unused-function",
+      "-Wno-unused-but-set-variable",
+      "-Iinc",
+      "-c",
+      "-o",
+      "bin/objs/jit.o",
+      "src/jit.c"
+    ],
+    "directory": "/home/luks/langauge/dvm",
+    "file": "/home/luks/langauge/dvm/src/jit.c",
+    "output": "/home/luks/langauge/dvm/bin/objs/jit.o"
+  },
+  {
+    "arguments": [
+      "/usr/bin/cc",
+      "-O2",
+      "-std=gnu11",
+      "-Wall",
+      "-Wno-unused-function",
+      "-Wno-unused-but-set-variable",
+      "-Iinc",
+      "-c",
+      "-o",
+      "bin/objs/jit_trampoline.o",
+      "src/jit_trampoline.c"
+    ],
+    "directory": "/home/luks/langauge/dvm",
+    "file": "/home/luks/langauge/dvm/src/jit_trampoline.c",
+    "output": "/home/luks/langauge/dvm/bin/objs/jit_trampoline.o"
+  },
+  {
+    "arguments": [
+      "/usr/bin/cc",
+      "-O2",
+      "-std=gnu11",
+      "-Wall",
+      "-Wno-unused-function",
+      "-Wno-unused-but-set-variable",
+      "-Iinc",
+      "-c",
+      "-o",
+      "bin/objs/syscall.o",
+      "src/syscall.c"
+    ],
+    "directory": "/home/luks/langauge/dvm",
+    "file": "/home/luks/langauge/dvm/src/syscall.c",
+    "output": "/home/luks/langauge/dvm/bin/objs/syscall.o"
+  },
+  {
+    "arguments": [
+      "/usr/bin/cc",
+      "-O2",
+      "-std=gnu11",
+      "-Wall",
+      "-Wno-unused-function",
+      "-Wno-unused-but-set-variable",
+      "-Iinc",
+      "-c",
+      "-o",
+      "bin/objs/test_vm.o",
+      "src/test_vm.c"
+    ],
+    "directory": "/home/luks/langauge/dvm",
+    "file": "/home/luks/langauge/dvm/src/test_vm.c",
+    "output": "/home/luks/langauge/dvm/bin/objs/test_vm.o"
+  },
+  {
+    "arguments": [
+      "/usr/bin/cc",
+      "-O2",
+      "-std=gnu11",
+      "-Wall",
+      "-Wno-unused-function",
+      "-Wno-unused-but-set-variable",
+      "-Iinc",
+      "-c",
+      "-o",
+      "bin/objs/vm.o",
+      "src/vm.c"
+    ],
+    "directory": "/home/luks/langauge/dvm",
+    "file": "/home/luks/langauge/dvm/src/vm.c",
+    "output": "/home/luks/langauge/dvm/bin/objs/vm.o"
+  },
+  {
+    "arguments": [
+      "/usr/bin/cc",
+      "-O2",
+      "-std=gnu11",
+      "-Wall",
+      "-Wno-unused-function",
+      "-Wno-unused-but-set-variable",
+      "-Iinc",
+      "-c",
+      "-o",
+      "bin/test/test_asm.o",
+      "test/test_asm.c"
+    ],
+    "directory": "/home/luks/langauge/dvm",
+    "file": "/home/luks/langauge/dvm/test/test_asm.c",
+    "output": "/home/luks/langauge/dvm/bin/test/test_asm.o"
+  },
+  {
+    "arguments": [
+      "/usr/bin/cc",
+      "-O2",
+      "-std=gnu11",
+      "-Wall",
+      "-Wno-unused-function",
+      "-Wno-unused-but-set-variable",
+      "-Iinc",
+      "-c",
+      "-o",
+      "bin/test/test_ops.o",
+      "test/test_ops.c"
+    ],
+    "directory": "/home/luks/langauge/dvm",
+    "file": "/home/luks/langauge/dvm/test/test_ops.c",
+    "output": "/home/luks/langauge/dvm/bin/test/test_ops.o"
+  },
+  {
+    "arguments": [
+      "/usr/bin/cc",
+      "-O2",
+      "-std=gnu11",
+      "-Wall",
+      "-Wno-unused-function",
+      "-Wno-unused-but-set-variable",
+      "-Iinc",
+      "-c",
+      "-o",
+      "bin/test/test_syscall.o",
+      "test/test_syscall.c"
+    ],
+    "directory": "/home/luks/langauge/dvm",
+    "file": "/home/luks/langauge/dvm/test/test_syscall.c",
+    "output": "/home/luks/langauge/dvm/bin/test/test_syscall.o"
+  }
+]
