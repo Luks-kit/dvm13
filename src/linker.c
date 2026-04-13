@@ -171,6 +171,7 @@ int dvm_link(const DvmProg *objs, size_t nobjs, DvmProg *out) {
             DvmRel *nr = &out->rels[out->nrels++];
             nr->code_offset = r->code_offset + (uint32_t)st->code_base;
             nr->sym_index   = (uint32_t)new_sym;
+            nr->kind        = r->kind;
         }
     }
 

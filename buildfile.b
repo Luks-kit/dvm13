@@ -12,9 +12,9 @@ compile(src, obj, cflags) {
     }
 }
 
-link(objs, out) {
+link(objs, out, ldflags) {
     auto cmd, cc, i;
-    cc = "cc";
+    cc = "gcc";
     if (anynewer(objs, out)) {
         printf("  LD ");
         printf(out);
@@ -25,6 +25,7 @@ link(objs, out) {
             cmd = cat(cmd, " ", objs[i]);
             i = i + 1;
         }
+        cmd = cat(cmd, " ", ldflags);
         system(cmd);
     }
 }
@@ -59,11 +60,12 @@ collect_sources(dir, list, start) {
 
 auto CFLAGS     = "-O2 -std=gnu11 -Wall -Wno-unused-function -Wno-unused-but-set-variable -Iinc";
 auto CFLAGS_DBG = "-g -fsanitize=address -std=gnu11 -Wall -Wno-unused-function -Wno-unused-but-set-variable -Iinc";
+auto LDFLAGS_DBG = "-fsanitize=address";
 auto CFLAGS_COV = "-g --coverage -std=gnu11 -Wall -Wno-unused-function -Wno-unused-but-set-variable -Iinc";
 
 /* Compile src/*.c → <obj_prefix>*.o, link → out.
    Returns the obj array for test linking. */
-build_srcs(flags, obj_prefix, out) {
+build_srcs(flags, ldflags, obj_prefix, out) {
     auto srcs, objs, i, next;
 
     srcs = glob("*.c");  /* scratch allocation */
@@ -83,23 +85,23 @@ build_srcs(flags, obj_prefix, out) {
         i = i + 1;
     }
 
-    link(objs, out);
+    link(objs, out, ldflags);
     return objs;
 }
 
 bin_all() {
-    build_srcs(CFLAGS, "bin/objs/", "bin/dvm");
+    build_srcs(CFLAGS, "", "bin/objs/", "bin/dvm");
 }
 
 bin_debug() {
-    build_srcs(CFLAGS_DBG, "bin/dbg/", "bin/dvm_dbg");
+    build_srcs(CFLAGS_DBG, LDFLAGS_DBG, "bin/dbg/", "bin/dvm_dbg");
 }
 
-build_tests(flags, obj_prefix, bin_suffix) {
+build_tests(flags, ldflags, obj_prefix, bin_suffix) {
     auto tsrcs, tobjs, tbins, sobjs, all_objs;
     auto i, j;
 
-    sobjs = build_srcs(flags, "bin/objs/", cat("bin/dvm", bin_suffix));
+    sobjs = build_srcs(flags, ldflags, "bin/objs/", cat("bin/dvm", bin_suffix));
 
     sobjs = filter_out(sobjs, "bin/objs/main.o");
 
@@ -127,14 +129,14 @@ build_tests(flags, obj_prefix, bin_suffix) {
         j = j + 1;
         all_objs[j] = "";
         
-        link(all_objs, tbins[i]);
+        link(all_objs, tbins[i], ldflags);
         i = i + 1;
     }
 }
 
 run_tests() {
     auto bins, i;
-    build_tests(CFLAGS, "bin/test/", "");
+    build_tests(cat(CFLAGS, " -g"), "", "bin/test/", "");
     bins = glob("bin/test_*");
     i = 0;
     while (strcmp(bins[i], "") != 0) {
@@ -148,7 +150,7 @@ run_tests() {
 
 run_tests_asan() {
     auto bins, i;
-    build_tests(CFLAGS_DBG, "bin/asan_", "_asan");
+    build_tests(CFLAGS_DBG, LDFLAGS_DBG, "bin/asan_", "_asan");
     bins = glob("bin/test_*_asan");
     i = 0;
     while (strcmp(bins[i], "") != 0) {
@@ -162,7 +164,7 @@ run_tests_asan() {
 
 run_tests_cov() {
     auto bins, i;
-    build_tests(CFLAGS_COV, "bin/cov_", "_cov");
+    build_tests(CFLAGS_COV, LDFLAGS_DBG, "bin/cov_", "_cov");
     bins = glob("bin/test_*_cov");
     i = 0;
     while (strcmp(bins[i], "") != 0) {
@@ -207,7 +209,23 @@ main(argc, argv) {
     if (strcmp(target, "clean") == 0)   { clean();            return 0; }
     if (strcmp(target, "install") == 0) { install();          return 0; }
     if (strcmp(target, "compdb") == 0)  { compile_commands(); return 0; }
-    if (strcmp(target, "run") == 0)     { bin_all(); system("bin/dvm"); return 0; }
+
+    if (strcmp(target, "run") == 0) {
+        auto cmd, i;
+
+        bin_all();
+
+        cmd = "bin/dvm";
+
+        i = 2;
+        while (i < argc) {
+            cmd = cat(cmd, " ", argv[i]);
+            i = i + 1;
+        }
+
+        system(cmd);
+        return 0;
+    }
 
     printf("Unknown target: ");
     printf(target);

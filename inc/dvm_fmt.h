@@ -74,9 +74,14 @@ typedef struct {
     uint32_t   offset;    // byte offset within section
 } DvmSym;
 
+// Relocation kinds
+#define DVM_REL_DATA 0   // patch 8 bytes: pointer to sym's section+offset
+#define DVM_REL_CODE 1   // patch 4 bytes: absolute code offset of sym
+
 typedef struct {
-    uint32_t code_offset; // offset in CODE section of the imm64 to patch
+    uint32_t code_offset; // offset in CODE section of the value to patch
     uint32_t sym_index;   // index into syms[]
+    uint8_t  kind;        // DVM_REL_DATA or DVM_REL_CODE
 } DvmRel;
 
 typedef struct {

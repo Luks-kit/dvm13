@@ -76,10 +76,15 @@ static uint32_t sym_index(AsmCtx *ctx, const char *name) {
 static void label_ref_code(AsmCtx *ctx, const char *name, int line) {
     LabelTable *lt = &ctx->lt;
     AsmLabel   *l  = asm_label_find(lt, name);
-    if (l && l->offset >= 0 && l->section == DVM_SEC_CODE) {
+
+    // Already-defined local code label — emit absolute offset directly
+    if (l && l->offset >= 0 && l->section == DVM_SEC_CODE
+          && l->flags != DVM_SYM_EXTERN) {
         buf_i32(&ctx->text, l->offset);
         return;
     }
+
+    // Forward ref or extern — emit placeholder, record patch
     if (lt->npatches >= ASM_MAX_PATCHES) {
         fputs("asm: patch table full\n", stderr); exit(1);
     }
@@ -89,6 +94,17 @@ static void label_ref_code(AsmCtx *ctx, const char *name, int line) {
     p->is64     = 0;
     p->line     = line;
     buf_i32(&ctx->text, 0);
+
+    // If declared extern, also emit a CODE reloc for linker
+    if (l && l->flags == DVM_SYM_EXTERN) {
+        if (ctx->nrels >= DVM_MAX_RELS) {
+            fputs("asm: reloc table full\n", stderr); exit(1);
+        }
+        DvmRel *r      = &ctx->rels[ctx->nrels++];
+        r->code_offset = (uint32_t)(ctx->text.len - 4);
+        r->sym_index   = sym_index(ctx, name);
+        r->kind        = DVM_REL_CODE;
+    }
 }
 
 // Emit an 8-byte data/extern reference → produces a reloc entry
@@ -99,6 +115,7 @@ static void label_ref_data(AsmCtx *ctx, const char *name, int line) {
     DvmRel *r    = &ctx->rels[ctx->nrels++];
     r->code_offset = (uint32_t)ctx->text.len;
     r->sym_index   = sym_index(ctx, name);
+    r->kind        = DVM_REL_DATA;
 
     // If symbol is already defined, we're done; placeholder patched at load
     // If undefined (extern/forward), recorded and resolved in patches_resolve
@@ -136,7 +153,9 @@ static int patches_resolve(AsmCtx *ctx) {
             }
             // sym_index already set in the DvmRel; nothing else to patch here
         } else {
-            // Code offset — must be a defined local code label
+            // Code offset — must be a defined local code label OR an extern
+            // (extern code refs are handled by DVM_REL_CODE relocs at link time)
+            if (l->flags == DVM_SYM_EXTERN) continue;  // linker will patch
             if (l->section != DVM_SEC_CODE || l->offset < 0) {
                 fprintf(stderr,"asm: undefined/non-code label '%s' (line %d)\n",p->name,p->line);
                 ok = 0; continue;
@@ -190,15 +209,10 @@ static char *expect_comma(char *p, int line) {
 }
 
 static int parse_reg(const char *s) {
-    if (!strcmp(s,"ax")) return REG_AX; 
-    if (!strcmp(s,"cx")) return REG_CX; 
-    if (!strcmp(s,"di")) return REG_DI; 
-    if (!strcmp(s,"ex")) return REG_EX;
-    if (!strcmp(s,"bx")) return REG_BX;
-    if (!strcmp(s,"dx")) return REG_DX;
-    if (!strcmp(s,"si")) return REG_SI;
-    if (!strcmp(s,"fx")) return REG_FX;
-
+    if (!strcmp(s,"ax")) return REG_AX; if (!strcmp(s,"bx")) return REG_BX;
+    if (!strcmp(s,"cx")) return REG_CX; if (!strcmp(s,"dx")) return REG_DX;
+    if (!strcmp(s,"di")) return REG_DI; if (!strcmp(s,"si")) return REG_SI;
+    if (!strcmp(s,"ex")) return REG_EX; if (!strcmp(s,"fx")) return REG_FX;
     return -1;
 }
 
