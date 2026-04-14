@@ -9,6 +9,44 @@
 
 void vm_run(uint8_t *bytecode, size_t stack_size);
 
+// ─── Path resolution ──────────────────────────────────────────────────────────
+// __FILE__ gives us the path to this source file at compile time.
+// We strip back to the project root (two directories up from test/).
+
+static char _proj_root[4096];
+static char _asm_dir[4096];
+
+static void init_paths(void) {
+    // Resolve __FILE__ to an absolute path, then strip to project root.
+    // __FILE__ may be relative (e.g. "test/test_asm_files.c") so use realpath.
+    char abs[4096] = {0};
+    if (!realpath(__FILE__, abs)) {
+        // fallback: assume cwd is project root
+        snprintf(_proj_root, 4096, ".");
+        snprintf(_asm_dir,   4096,   "./test/asm");
+        return;
+    }
+    // abs = /path/to/dvm/test/test_asm_files.c
+    char *slash = strrchr(abs, '/');
+    if (slash) *slash = 0;              // strip filename → .../test
+    slash = strrchr(abs, '/');
+    if (slash) *slash = 0;              // strip /test → project root
+    snprintf(_proj_root, 4096, "%s", abs);
+    snprintf(_asm_dir,   4096,   "%s/test/asm", abs);
+}
+
+// Build a path relative to the project root
+static char _path_buf[4096];
+static const char *proj_path(const char *rel) {
+    snprintf(_path_buf, 4096, "%s/%s", _proj_root, rel);
+    return _path_buf;
+}
+
+static const char *asm_path(const char *name) {
+    snprintf(_path_buf, 4096, "%s/%s", _asm_dir, name);
+    return _path_buf;
+}
+
 // ─── Infra ────────────────────────────────────────────────────────────────────
 
 #define PASS(name) printf("PASS  %-36s\n", name)
@@ -24,7 +62,7 @@ static char *read_file(const char *path) {
     fseek(f, 0, SEEK_END); long sz = ftell(f); rewind(f);
     char *buf = malloc((size_t)sz + 1);
     if (!buf) { fclose(f); return NULL; }
-    fread(buf, 1, (size_t)sz, f);
+    if(!fread(buf,1,(size_t)sz,f)) {free(buf);fclose(f); return NULL;}
     buf[sz] = 0;
     fclose(f);
     return buf;
@@ -134,37 +172,37 @@ static uint64_t run_asm(const char *path) {
 } while(0)
 
 static void test_arith(void) {
-    ASM_TEST("arith", "test/asm/arith.asm", 42);
+    ASM_TEST("arith", asm_path("arith.asm"), 42);
 }
 
 static void test_bitwise(void) {
     // ~0xFF00 & 0xFFFF = 0x00FF,  0x00FF | 0x002A = 0x00FF (0x2A ⊆ 0xFF)
-    ASM_TEST("bitwise", "test/asm/bitwise.asm", 0x00FF);
+    ASM_TEST("bitwise", asm_path("bitwise.asm"), 0x00FF);
 }
 
 static void test_loop(void) {
-    ASM_TEST("loop", "test/asm/loop.asm", 55);
+    ASM_TEST("loop", asm_path("loop.asm"), 55);
 }
 
 static void test_fib(void) {
-    ASM_TEST("fib", "test/asm/fib.asm", 55);
+    ASM_TEST("fib", asm_path("fib.asm"), 55);
 }
 
 static void test_data_ref(void) {
-    ASM_TEST("data_ref", "test/asm/data_ref.asm", 300);
+    ASM_TEST("data_ref", asm_path("data_ref.asm"), 300);
 }
 
 static void test_equ(void) {
     // 80 * 24 - 2 = 1918
-    ASM_TEST("equ", "test/asm/equ.asm", 1918);
+    ASM_TEST("equ", asm_path("equ.asm"), 1918);
 }
 
 static void test_throw(void) {
-    ASM_TEST("throw", "test/asm/throw.asm", 0xCAFE);
+    ASM_TEST("throw", asm_path("throw.asm"), 0xCAFE);
 }
 
 static void test_float(void) {
-    ASM_TEST("float", "test/asm/float.asm", 42);
+    ASM_TEST("float", asm_path("float.asm"), 42);
 }
 
 // ─── Linker test ──────────────────────────────────────────────────────────────
@@ -172,10 +210,10 @@ static void test_float(void) {
 static void test_link(void) {
     DvmProg lib, main_obj, linked;
 
-    if (!asm_file("test/asm/math_lib.asm", &lib)) {
+    if (!asm_file(asm_path("math_lib.asm"), &lib)) {
         FAIL("link", "failed to assemble math_lib.asm");
     }
-    if (!asm_file("test/asm/linker_main.asm", &main_obj)) {
+    if (!asm_file(asm_path("linker_main.asm"), &main_obj)) {
         FAIL("link", "failed to assemble linker_main.asm");
     }
 
@@ -341,6 +379,7 @@ static void test_file_roundtrip(void) {
 // ─── main ─────────────────────────────────────────────────────────────────────
 
 int main(void) {
+    init_paths();
     printf("─── single-object .asm tests ───────────────\n");
     test_arith();
     test_bitwise();

@@ -5,6 +5,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <unistd.h>
 
 void vm_run(uint8_t *bytecode, size_t stack_size);
 
@@ -23,7 +24,11 @@ static char *read_file(const char *path) {
     FILE *f=fopen(path,"r"); if(!f){perror(path);return NULL;}
     fseek(f,0,SEEK_END); long sz=ftell(f); rewind(f);
     char *buf=malloc((size_t)sz+1);
-    fread(buf,1,(size_t)sz,f); buf[sz]=0; fclose(f);
+    if (!buf) goto cleanup;
+    if(!fread(buf,1,(size_t)sz,f)) {free(buf); buf = NULL; goto cleanup;} 
+    buf[sz]=0;
+cleanup: 
+    fclose(f);
     return buf;
 }
 

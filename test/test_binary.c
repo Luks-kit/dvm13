@@ -187,7 +187,7 @@ static void test_truncated_file(void) {
     assert(dvm_write_file(tmp, &orig));
 
     // Truncate to 8 bytes (just past magic + CNST tag)
-    truncate(tmp, 8);
+    assert(truncate(tmp, 8) != -1);
 
     DvmProg prog;
     FILE *old = stderr; stderr = fopen("/dev/null", "w");

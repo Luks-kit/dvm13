@@ -40,6 +40,7 @@ int dvm_write(FILE *f, const DvmProg *p) {
     for (size_t i=0; i<p->nrels; i++) {
         if (!fw_u32(f,p->rels[i].code_offset)) return 0;
         if (!fw_u32(f,p->rels[i].sym_index))   return 0;
+        if (!fw_u8 (f,p->rels[i].kind))        return 0;
     }
 
     return fw_tag(f,DVM_TAG_END);
@@ -119,6 +120,7 @@ int dvm_read(FILE *f, DvmProg *prog) {
     for (uint32_t i=0;i<nrels;i++) {
         if (!fr_u32(f,&prog->rels[i].code_offset)) return 0;
         if (!fr_u32(f,&prog->rels[i].sym_index))   return 0;
+        if (!fr_u8 (f,&prog->rels[i].kind))        return 0;
     }
 
     return fr_expect_tag(f,DVM_TAG_END);
@@ -181,8 +183,15 @@ int dvm_load(const DvmProg *prog, DvmLoaded *out) {
             fprintf(stderr,"dvm_load: reloc '%s' references empty section\n",s->name);
             dvm_unload(out); return 0;
         }
-        uint64_t target=(uint64_t)(bases[s->section]+s->offset);
-        memcpy(out->code+r->code_offset,&target,8);
+        if (r->kind == DVM_REL_CODE) {
+            // 4-byte absolute code offset
+            uint32_t code_off = s->offset;
+            memcpy(out->code + r->code_offset, &code_off, 4);
+        } else {
+            // 8-byte absolute pointer
+            uint64_t target = (uint64_t)(bases[s->section] + s->offset);
+            memcpy(out->code + r->code_offset, &target, 8);
+        }
     }
 
     // Protect

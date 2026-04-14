@@ -209,10 +209,15 @@ static char *expect_comma(char *p, int line) {
 }
 
 static int parse_reg(const char *s) {
-    if (!strcmp(s,"ax")) return REG_AX; if (!strcmp(s,"bx")) return REG_BX;
-    if (!strcmp(s,"cx")) return REG_CX; if (!strcmp(s,"dx")) return REG_DX;
-    if (!strcmp(s,"di")) return REG_DI; if (!strcmp(s,"si")) return REG_SI;
-    if (!strcmp(s,"ex")) return REG_EX; if (!strcmp(s,"fx")) return REG_FX;
+    if (!strcmp(s,"ax")) return REG_AX; 
+    if (!strcmp(s,"cx")) return REG_CX; 
+    if (!strcmp(s,"di")) return REG_DI; 
+    if (!strcmp(s,"ex")) return REG_EX; 
+    if (!strcmp(s,"bx")) return REG_BX;
+    if (!strcmp(s,"dx")) return REG_DX;
+    if (!strcmp(s,"si")) return REG_SI;
+    if (!strcmp(s,"fx")) return REG_FX;
+
     return -1;
 }
 
