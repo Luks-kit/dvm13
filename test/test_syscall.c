@@ -127,9 +127,9 @@ static void test_syscall_mmap_via_dispatch(void) {
 static void test_syscall_unknown(void) {
     // unknown syscall number should return -1
     uint64_t ret = 0;
-    FILE *old = stderr; stderr = fopen("/dev/null","w");
+    silence_stderr();
     int rc = dvm_syscall(DVM_SYS_COUNT + 99, 0, 0, 0, 0, 0, &ret);
-    fclose(stderr); stderr = old;
+    restore_stderr();
     assert(rc == -1 && "unknown syscall should fail");
     PASS("syscall_unknown");
 }
@@ -150,7 +150,7 @@ static void test_op_syscall_write(void) {
         "    halt\n",
         (unsigned long long)DVM_SYS_WRITE,
         (unsigned long long)(uint64_t)dot,
-        STORE);
+        STORE); 
     uint64_t r = asm_run(src);
     assert(r == 1 && "write should return 1 byte written");
     PASS("op_syscall_write");

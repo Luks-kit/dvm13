@@ -207,14 +207,13 @@ static void test_asm_jle(void) {
 
 // Redirect stderr to /dev/null and verify asm_compile returns 0
 static int asm_should_fail(const char *src) {
-    // suppress error output during negative tests
-    FILE *old_stderr = stderr;
-    stderr = fopen("/dev/null", "w");
+    silence_stderr();
+    
     AsmCtx _tmp; memset(&_tmp, 0, sizeof(_tmp));
     int ok = asm_compile(src, &_tmp);
-    fclose(stderr);
-    stderr = old_stderr;
-    return !ok;  // returns 1 if it correctly failed
+    
+    restore_stderr();
+    return !ok;
 }
 
 static void test_undefined_label(void) {

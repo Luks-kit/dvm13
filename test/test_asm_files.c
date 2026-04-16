@@ -283,10 +283,9 @@ static void test_link_unresolved_extern(void) {
     memcpy(obj.rels,tmp.rels,tmp.nrels*sizeof(DvmRel));
 
     DvmProg out;
-    FILE *old = stderr; stderr = fopen("/dev/null","w");
+    silence_stderr();
     int ok = dvm_link(&obj, 1, &out, NULL);
-    fclose(stderr); stderr = old;
-
+    restore_stderr();
     assert(!ok && "link with unresolved extern should fail");
     dvm_prog_free(&obj);
     PASS("link_unresolved_extern_fails");
@@ -317,10 +316,9 @@ static void test_link_duplicate_global(void) {
 
     const DvmProg objs[2]={oa,ob};
     DvmProg out;
-    FILE *old=stderr; stderr=fopen("/dev/null","w");
+    silence_stderr();
     int ok=dvm_link(objs,2,&out, NULL);
-    fclose(stderr); stderr=old;
-
+    restore_stderr();
     assert(!ok && "duplicate global should fail");
     dvm_prog_free(&oa); dvm_prog_free(&ob);
     PASS("link_duplicate_global_fails");

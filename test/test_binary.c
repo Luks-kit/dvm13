@@ -168,34 +168,52 @@ static void test_rt_large_code(void) {
 // ─── Error paths ──────────────────────────────────────────────────────────────
 
 static void test_bad_magic(void) {
-    const char *tmp = "/tmp/dvm_test_badmagic.dvm";
-    FILE *f = fopen(tmp, "wb"); fwrite("BAAD\0\0\0\0", 1, 8, f); fclose(f);
+    const char *tmp = "test_badmagic.dvm"; // Local dir is safer than /tmp/
+    FILE *f = fopen(tmp, "wb"); 
+    if(f) {
+        fwrite("BAAD\0\0\0\0", 1, 8, f); 
+        fclose(f);
+    }
+
     DvmProg prog;
-    FILE *old = stderr; stderr = fopen("/dev/null", "w");
+    silence_stderr(); 
     int ok = dvm_read_file(tmp, &prog);
-    fclose(stderr); stderr = old;
+    
+    restore_stderr();
+    remove(tmp); // Clean up
     assert(!ok);
     PASS("bad_magic_rejected");
 }
 
+
 static void test_truncated_file(void) {
-    // Write a valid header then truncate — should fail gracefully
-    const char *tmp = "/tmp/dvm_test_trunc.dvm";
+    const char *tmp = "test_trunc.dvm";
     DvmProg orig = {0};
-    uint8_t code[] = { OP_HALT };
+    uint8_t code[] = { 0x01 }; // Assuming OP_HALT
     orig.code = code; orig.code_len = 1;
     assert(dvm_write_file(tmp, &orig));
 
-    // Truncate to 8 bytes (just past magic + CNST tag)
+    // Portable Truncation
+#ifdef _WIN32
+    int fd = _open(tmp, _O_RDWR | _O_BINARY);
+    assert(fd != -1);
+    assert(_chsize(fd, 8) == 0);
+    _close(fd);
+#else
     assert(truncate(tmp, 8) != -1);
+#endif
 
     DvmProg prog;
-    FILE *old = stderr; stderr = fopen("/dev/null", "w");
+    silence_stderr();
+    
     int ok = dvm_read_file(tmp, &prog);
-    fclose(stderr); stderr = old;
+    
+    restore_stderr();
+    remove(tmp);
     assert(!ok);
     PASS("truncated_file_rejected");
 }
+
 
 // ─── Pseudo-op byte layout ────────────────────────────────────────────────────
 // These check that the assembler emits the correct bytes in data sections,
