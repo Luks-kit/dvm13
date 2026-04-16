@@ -86,6 +86,56 @@ typedef enum __attribute__((packed)) {
     OP_SYSCALL,         // ax=dvm_nr  bx..si=args  →  ax=result
     OP_HALT,
 
+    // ── sized memory loads (zero-extending) ──────── [op][ds]
+    OP_MOVZX_RM8,       // dst = (uint64_t)*(uint8_t *)[src]
+    OP_MOVZX_RM16,      // dst = (uint64_t)*(uint16_t*)[src]
+    OP_MOVZX_RM32,      // dst = (uint64_t)*(uint32_t*)[src]
+
+    // ── sized memory loads (sign-extending) ─────── [op][ds]
+    OP_MOVSX_RM8,       // dst = (int64_t)*(int8_t *)[src]
+    OP_MOVSX_RM16,      // dst = (int64_t)*(int16_t*)[src]
+    OP_MOVSX_RM32,      // dst = (int64_t)*(int32_t*)[src]
+
+    // ── sized memory stores (truncating) ─────────── [op][ds]
+    OP_MOV_MR8,         // *(uint8_t *)[dst] = src & 0xFF
+    OP_MOV_MR16,        // *(uint16_t*)[dst] = src & 0xFFFF
+    OP_MOV_MR32,        // *(uint32_t*)[dst] = src & 0xFFFFFFFF
+
+    // ── indexed memory (base + signed imm32 offset) ─ [op][ds][off:4]
+    OP_MOV_RM_OFF,      // dst  = *(uint64_t*)(src  + off)
+    OP_MOV_MR_OFF,      // *(uint64_t*)(dst + off) = src
+
+    // ── indexed + sized loads (zero-extending) ───── [op][ds][off:4]
+    OP_MOVZX_RM8_OFF,
+    OP_MOVZX_RM16_OFF,
+    OP_MOVZX_RM32_OFF,
+
+    // ── indexed + sized loads (sign-extending) ───── [op][ds][off:4]
+    OP_MOVSX_RM8_OFF,
+    OP_MOVSX_RM16_OFF,
+    OP_MOVSX_RM32_OFF,
+
+    // ── indexed + sized stores ───────────────────── [op][ds][off:4]
+    OP_MOV_MR8_OFF,
+    OP_MOV_MR16_OFF,
+    OP_MOV_MR32_OFF,
+
+    // ── indirect call ────────────────────────────────────────────────
+    // callr dst, err_off — ip = GPR[dst]; push err+ok onto shadow stack
+    OP_CALLR,           // [op][d_][err:4]  (ok = ip after fetch)
+
+    // ── dynamic stack / addressing ───────────────────────────────────
+    // alloca: sp -= ax (rounded up to 8-byte align), ax = new sp
+    OP_ALLOCA,          // [op]
+
+    // lea dst, [bp+off] — effective address of bp-relative slot
+    OP_LEA,             // [op][d_][off:4]  (signed imm32 offset)
+
+    // ── truncation helpers ────────────────────────────────────────────
+    OP_TRUNC8,          // dst &= 0xFF              [op][d_]
+    OP_TRUNC16,         // dst &= 0xFFFF            [op][d_]
+    OP_TRUNC32,         // dst &= 0xFFFFFFFF        [op][d_]
+
     OP_COUNT
 } Op;
 

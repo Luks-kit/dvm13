@@ -18,8 +18,9 @@
 // Section data in the output is heap-allocated; call dvm_prog_free() when done.
 
 // Link N objects. Returns 1 on success, 0 on error (message to stderr).
-int dvm_link(const DvmProg *objs, size_t nobjs, DvmProg *out);
+// entry_sym: name of the entry point symbol (NULL = auto-detect _start, then main, then 0).
+int dvm_link(const DvmProg *objs, size_t nobjs, DvmProg *out, const char *entry_sym);
 
 // Convenience: link from files, write result to path.
-// obj_paths[0..nobjs-1] are input .dvm files, out_path is the output.
-int dvm_link_files(const char **obj_paths, size_t nobjs, const char *out_path);
+int dvm_link_files(const char **obj_paths, size_t nobjs,
+                   const char *out_path, const char *entry_sym);

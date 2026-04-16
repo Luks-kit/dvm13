@@ -13,7 +13,7 @@ static void usage(const char *argv0) {
     fprintf(stderr,
         "Usage:\n"
         "  %s asm   <file.s> [out.dvm]          assemble to object/executable\n"
-        "  %s link  <a.dvm> <b.dvm> ... -o out  link objects to executable\n"
+        "  %s link  <a.dvm> <b.dvm> ... -o out [--entry sym]  link objects\n"
         "  %s run   <file.dvm>                  load and execute\n"
         "  %s dump  <file.dvm>                  print section/symbol info\n",
         argv0,argv0,argv0,argv0);
@@ -56,15 +56,16 @@ static int cmd_asm(int argc, char **argv) {
 }
 
 static int cmd_link(int argc, char **argv) {
-    // dvm link <obj1> <obj2> ... -o <out>
-    const char *out_path = "out.dvm";
+    const char *out_path  = "out.dvm";
+    const char *entry_sym = NULL;
     const char *inputs[64]; size_t ninputs=0;
     for (int i=0; i<argc; i++) {
-        if (!strcmp(argv[i],"-o")) { if(i+1<argc) out_path=argv[++i]; }
+        if      (!strcmp(argv[i],"-o"))        { if(i+1<argc) out_path  = argv[++i]; }
+        else if (!strcmp(argv[i],"--entry"))   { if(i+1<argc) entry_sym = argv[++i]; }
         else inputs[ninputs++] = argv[i];
     }
     if (!ninputs) { fputs("link: no input files\n",stderr); return 1; }
-    if (!dvm_link_files(inputs,ninputs,out_path)) return 1;
+    if (!dvm_link_files(inputs,ninputs,out_path,entry_sym)) return 1;
     printf("linked %s\n",out_path);
     return 0;
 }
@@ -74,7 +75,7 @@ static int cmd_run(const char *path) {
     if (!dvm_load_file(path,&loaded)) {
         fprintf(stderr,"run: failed to load '%s'\n",path); return 1;
     }
-    vm_run(loaded.code, 1<<20);
+    vm_run(loaded.code + loaded.entry_offset, 1<<20);
     dvm_unload(&loaded);
     return 0;
 }
@@ -100,6 +101,8 @@ static int cmd_dump(const char *path) {
                i,sym_flag(s->flags),sec_name(s->section),sec_name(s->section),s->offset);
         printf("       %s\n",s->name);
     }
+    printf("entry: code+0x%x%s\n", prog.entry_offset,
+           prog.has_entry ? "" : " (default)");
     printf("rels:  %zu\n",prog.nrels);
     for (size_t i=0;i<prog.nrels;i++) {
         const DvmRel *r=&prog.rels[i];

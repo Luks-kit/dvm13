@@ -212,7 +212,7 @@ static int parse_reg(const char *s) {
     if (!strcmp(s,"ax")) return REG_AX; 
     if (!strcmp(s,"cx")) return REG_CX; 
     if (!strcmp(s,"di")) return REG_DI; 
-    if (!strcmp(s,"ex")) return REG_EX; 
+    if (!strcmp(s,"ex")) return REG_EX;
     if (!strcmp(s,"bx")) return REG_BX;
     if (!strcmp(s,"dx")) return REG_DX;
     if (!strcmp(s,"si")) return REG_SI;
@@ -228,11 +228,30 @@ static int parse_fpreg(const char *s) {
 
 static int parse_mem(const char *s) {
     if (s[0]!='[') return -1;
-    char inner[16]; size_t i=0;
+    char inner[32]; size_t i=0;
     const char *p=s+1;
-    while (*p&&*p!=']'&&i<15) inner[i++]=*p++;
+    while (*p&&*p!=']'&&i<31) inner[i++]=*p++;
     inner[i]=0;
-    return parse_reg(inner);
+    // plain [reg]
+    int r = parse_reg(inner);
+    if (r >= 0) return r;
+    // [reg+off] or [reg-off] — just return reg part, caller uses parse_mem_off
+    char tmp[8]={0}; i=0;
+    const char *q=inner;
+    while (*q && *q!='+' && *q!='-' && i<7) tmp[i++]=*q++;
+    return parse_reg(tmp);
+}
+
+// Parse [reg+off] or [reg-off] → offset (0 if plain [reg])
+static int32_t parse_mem_off(const char *s) {
+    if (s[0]!='[') return 0;
+    const char *p=s+1;
+    while (*p && *p!='+' && *p!='-' && *p!=']') p++;
+    if (*p==']' || !*p) return 0;
+    char *end;
+    int32_t sign = (*p=='+') ? 1 : -1;
+    int32_t v = (int32_t)strtol(p+1, &end, 0);
+    return sign * v;
 }
 
 // Parse immediate or .equ constant.  Returns value, sets *ok=0 on failure.
@@ -404,11 +423,30 @@ int asm_compile(const char *src, AsmCtx *ctx) {
         if (!strcmp(mnem,"mov")) {
             char a[64],b[64];
             p=read_tok(p,a,64); p=expect_comma(p,lineno); p=read_tok(p,b,64);
+
             int mem_d=parse_mem(a), mem_s=parse_mem(b);
+            int32_t off_d=parse_mem_off(a), off_s=parse_mem_off(b);
+
+            // check for size qualifiers: "byte", "word", "dword" before [...]
+            // e.g.  mov byte [ax], bx  or  mov ax, byte [bx]
+            // (these are parsed as separate tokens, so handled in movzx/movsx/mov-sized below)
+
             if (mem_d>=0) {
-                buf_u8(sec,OP_MOV_MR); buf_u8(sec,RB(mem_d,REQ_REG(b,lineno)));
+                // store to memory
+                int rs = REQ_REG(b,lineno);
+                if (off_d != 0) {
+                    buf_u8(sec,OP_MOV_MR_OFF); buf_u8(sec,RB(mem_d,rs)); buf_i32(sec,off_d);
+                } else {
+                    buf_u8(sec,OP_MOV_MR); buf_u8(sec,RB(mem_d,rs));
+                }
             } else if (mem_s>=0) {
-                buf_u8(sec,OP_MOV_RM); buf_u8(sec,RB(REQ_REG(a,lineno),mem_s));
+                // load from memory
+                int rd = REQ_REG(a,lineno);
+                if (off_s != 0) {
+                    buf_u8(sec,OP_MOV_RM_OFF); buf_u8(sec,RB(rd,mem_s)); buf_i32(sec,off_s);
+                } else {
+                    buf_u8(sec,OP_MOV_RM); buf_u8(sec,RB(rd,mem_s));
+                }
             } else {
                 int rd=REQ_REG(a,lineno);
                 int rs=parse_reg(b);
@@ -425,6 +463,57 @@ int asm_compile(const char *src, AsmCtx *ctx) {
             }
             continue;
         }
+
+        // ── sized stores: mov byte/word/dword [reg+off], src ─────────────────────
+        // syntax: the size keyword is the mnemonic prefix parsed separately
+        // e.g. line "mov byte [ax+4], bx" is tokenized as mnem="mov" but we handle
+        // the size via explicit "movb"/"movw"/"movd" mnemonics in assembler
+        // "movb [reg+off], src"  "movw [reg+off], src"  "movd [reg+off], src"
+        #define SIZED_STORE(nm, op, op_off) \
+        if (!strcmp(mnem,nm)) { \
+            char a[64],b[64]; \
+            p=read_tok(p,a,64); p=expect_comma(p,lineno); p=read_tok(p,b,64); \
+            int rd=parse_mem(a); int rs=REQ_REG(b,lineno); \
+            if(rd<0){fprintf(stderr,"asm line %d: expected [reg], got %s\n",lineno,a);return 0;} \
+            int32_t off=parse_mem_off(a); \
+            if(off){ buf_u8(sec,op_off); buf_u8(sec,RB(rd,rs)); buf_i32(sec,off); } \
+            else   { buf_u8(sec,op);     buf_u8(sec,RB(rd,rs)); } \
+            continue; \
+        }
+        SIZED_STORE("movb", OP_MOV_MR8,  OP_MOV_MR8_OFF)
+        SIZED_STORE("movw", OP_MOV_MR16, OP_MOV_MR16_OFF)
+        SIZED_STORE("movd", OP_MOV_MR32, OP_MOV_MR32_OFF)
+        #undef SIZED_STORE
+
+        // ── sized loads: movzx / movsx ───────────────────────────────────────────
+        // movzx dst, byte/word/dword [reg+off]
+        // movsx dst, byte/word/dword [reg+off]
+        // We parse as: mnem="movzx" or "movsx", then size keyword, then [reg+off]
+        #define SIZED_LOAD(nm, op8, op16, op32, op8o, op16o, op32o) \
+        if (!strcmp(mnem,nm)) { \
+            char sl_d[64],sz[16],sl_s[64]; \
+            p=read_tok(p,sl_d,64); p=expect_comma(p,lineno); \
+            p=read_tok(p,sz,16); p=read_tok(p,sl_s,64); \
+            int rd=REQ_REG(sl_d,lineno); \
+            int rs=parse_mem(sl_s); \
+            if(rs<0){fprintf(stderr,"asm line %d: expected [reg]\n",lineno);return 0;} \
+            int32_t off=parse_mem_off(sl_s); \
+            Op chosen; \
+            if      (!strcmp(sz,"byte"))  chosen = off ? op8o  : op8;  \
+            else if (!strcmp(sz,"word"))  chosen = off ? op16o : op16; \
+            else if (!strcmp(sz,"dword")) chosen = off ? op32o : op32; \
+            else {fprintf(stderr,"asm line %d: expected byte/word/dword\n",lineno);return 0;} \
+            buf_u8(sec,(uint8_t)chosen); buf_u8(sec,RB(rd,rs)); \
+            if(off) buf_i32(sec,off); \
+            continue; \
+        }
+        SIZED_LOAD("movzx",
+            OP_MOVZX_RM8,  OP_MOVZX_RM16,  OP_MOVZX_RM32,
+            OP_MOVZX_RM8_OFF, OP_MOVZX_RM16_OFF, OP_MOVZX_RM32_OFF)
+        SIZED_LOAD("movsx",
+            OP_MOVSX_RM8,  OP_MOVSX_RM16,  OP_MOVSX_RM32,
+            OP_MOVSX_RM8_OFF, OP_MOVSX_RM16_OFF, OP_MOVSX_RM32_OFF)
+        #undef SIZED_LOAD
 
         #define ALU2(nm,op) if(!strcmp(mnem,nm)){ \
             char a[64],b[64]; p=read_tok(p,a,64); p=expect_comma(p,lineno); p=read_tok(p,b,64); \
@@ -506,6 +595,42 @@ int asm_compile(const char *src, AsmCtx *ctx) {
             char a[64],b[64]; p=read_tok(p,a,64); p=expect_comma(p,lineno); p=read_tok(p,b,64);
             buf_u8(sec,OP_FTOI); buf_u8(sec,RB(REQ_REG(a,lineno),REQ_FPREG(b,lineno))); continue;
         }
+
+        // ── callr: indirect call through register ────────────────────────────────
+        if (!strcmp(mnem,"callr")) {
+            char a[64],err_l[64];
+            p=read_tok(p,a,64); p=expect_comma(p,lineno); p=read_tok(p,err_l,64);
+            int rd=REQ_REG(a,lineno);
+            buf_u8(sec,OP_CALLR); buf_u8(sec,RB(rd,0));
+            label_ref_code(ctx,err_l,lineno);
+            continue;
+        }
+
+        // ── alloca ────────────────────────────────────────────────────────────────
+        if (!strcmp(mnem,"alloca")) { buf_u8(sec,OP_ALLOCA); continue; }
+
+        // ── lea: load effective address ────────────────────────────────────────────
+        // lea dst, [bp+off]  or  lea dst, [bp-off]
+        if (!strcmp(mnem,"lea")) {
+            char a[64],b[64];
+            p=read_tok(p,a,64); p=expect_comma(p,lineno); p=read_tok(p,b,64);
+            int rd=REQ_REG(a,lineno);
+            // b should be [bp+off] or [bp-off]
+            int base=parse_mem(b);
+            if(base<0){fprintf(stderr,"asm line %d: lea expects [reg+off]\n",lineno);return 0;}
+            int32_t off=parse_mem_off(b);
+            buf_u8(sec,OP_LEA); buf_u8(sec,RB(rd,0)); buf_i32(sec,off);
+            continue;
+        }
+
+        // ── truncation ────────────────────────────────────────────────────────────
+        #define TRUNC1(nm,op) \
+        if(!strcmp(mnem,nm)){ char a[64]; p=read_tok(p,a,64); \
+            buf_u8(sec,op); buf_u8(sec,RB(REQ_REG(a,lineno),0)); continue; }
+        TRUNC1("trunc8",  OP_TRUNC8)
+        TRUNC1("trunc16", OP_TRUNC16)
+        TRUNC1("trunc32", OP_TRUNC32)
+        #undef TRUNC1
 
         fprintf(stderr,"asm line %d: unknown mnemonic '%s'\n",lineno,mnem);
         return 0;

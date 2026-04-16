@@ -225,7 +225,7 @@ static void test_link(void) {
         FAIL("link", "linker_main.asm should have extern symbols");
 
     const DvmProg objs[2] = { main_obj, lib };
-    if (!dvm_link(objs, 2, &linked)) {
+    if (!dvm_link(objs, 2, &linked, NULL)) {
         FAIL("link", "dvm_link failed");
     }
 
@@ -284,7 +284,7 @@ static void test_link_unresolved_extern(void) {
 
     DvmProg out;
     FILE *old = stderr; stderr = fopen("/dev/null","w");
-    int ok = dvm_link(&obj, 1, &out);
+    int ok = dvm_link(&obj, 1, &out, NULL);
     fclose(stderr); stderr = old;
 
     assert(!ok && "link with unresolved extern should fail");
@@ -318,7 +318,7 @@ static void test_link_duplicate_global(void) {
     const DvmProg objs[2]={oa,ob};
     DvmProg out;
     FILE *old=stderr; stderr=fopen("/dev/null","w");
-    int ok=dvm_link(objs,2,&out);
+    int ok=dvm_link(objs,2,&out, NULL);
     fclose(stderr); stderr=old;
 
     assert(!ok && "duplicate global should fail");

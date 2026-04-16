@@ -41,6 +41,7 @@
 #define DVM_TAG_CNST "CNST"
 #define DVM_TAG_DATA "DATA"
 #define DVM_TAG_CODE "CODE"
+#define DVM_TAG_ENTR "ENTR"   // entry point — 4-byte code offset (always present in executables)
 #define DVM_TAG_SYMS "SYMS"
 #define DVM_TAG_RELS "RELS"
 #define DVM_TAG_END  "END\0"
@@ -94,6 +95,9 @@ typedef struct {
 
     DvmRel    rels[DVM_MAX_RELS];
     size_t    nrels;
+
+    uint32_t  entry_offset;  // byte offset in CODE where execution starts (default 0)
+    int       has_entry;     // 1 = entry_offset was explicitly set by assembler/linker
 } DvmProg;
 
 // Loaded (runtime) sections mapped into proper memory
@@ -101,4 +105,5 @@ typedef struct {
     uint8_t  *cnst;  size_t cnst_len;  // PROT_READ
     uint8_t  *data;  size_t data_len;  // PROT_READ|WRITE
     uint8_t  *code;  size_t code_len;  // PROT_READ|EXEC
+    uint32_t  entry_offset;            // byte offset in code where execution starts
 } DvmLoaded;

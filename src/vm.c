@@ -87,6 +87,36 @@ void vm_run(uint8_t *bytecode, size_t stack_size) {
         [OP_FMOV_MR] = &&op_fmov_mr, [OP_ITOF]    = &&op_itof,
         [OP_FTOI]    = &&op_ftoi,    [OP_SYSCALL] = &&op_syscall,
         [OP_HALT]    = &&op_halt,
+        // sized loads
+        [OP_MOVZX_RM8]  = &&op_movzx_rm8,  [OP_MOVZX_RM16] = &&op_movzx_rm16,
+        [OP_MOVZX_RM32] = &&op_movzx_rm32,
+        [OP_MOVSX_RM8]  = &&op_movsx_rm8,  [OP_MOVSX_RM16] = &&op_movsx_rm16,
+        [OP_MOVSX_RM32] = &&op_movsx_rm32,
+        // sized stores
+        [OP_MOV_MR8]    = &&op_mov_mr8,    [OP_MOV_MR16]   = &&op_mov_mr16,
+        [OP_MOV_MR32]   = &&op_mov_mr32,
+        // indexed 64-bit
+        [OP_MOV_RM_OFF] = &&op_mov_rm_off, [OP_MOV_MR_OFF] = &&op_mov_mr_off,
+        // indexed sized loads zx
+        [OP_MOVZX_RM8_OFF]  = &&op_movzx_rm8_off,
+        [OP_MOVZX_RM16_OFF] = &&op_movzx_rm16_off,
+        [OP_MOVZX_RM32_OFF] = &&op_movzx_rm32_off,
+        // indexed sized loads sx
+        [OP_MOVSX_RM8_OFF]  = &&op_movsx_rm8_off,
+        [OP_MOVSX_RM16_OFF] = &&op_movsx_rm16_off,
+        [OP_MOVSX_RM32_OFF] = &&op_movsx_rm32_off,
+        // indexed sized stores
+        [OP_MOV_MR8_OFF]    = &&op_mov_mr8_off,
+        [OP_MOV_MR16_OFF]   = &&op_mov_mr16_off,
+        [OP_MOV_MR32_OFF]   = &&op_mov_mr32_off,
+        // control
+        [OP_CALLR]  = &&op_callr,
+        [OP_ALLOCA] = &&op_alloca,
+        [OP_LEA]    = &&op_lea,
+        // truncation
+        [OP_TRUNC8]  = &&op_trunc8,
+        [OP_TRUNC16] = &&op_trunc16,
+        [OP_TRUNC32] = &&op_trunc32,
     };
 
     NEXT;
@@ -216,6 +246,86 @@ void vm_run(uint8_t *bytecode, size_t stack_size) {
         rf->gpr.ax = result;
         NEXT;
     }
+
+    // ── sized loads (zero-extending) ────────────────────────────────────────────
+    op_movzx_rm8:  { uint8_t d,s; FETCHREGS(d,s); S(d,(uint64_t)*( uint8_t*)G(s)); NEXT; }
+    op_movzx_rm16: { uint8_t d,s; FETCHREGS(d,s); S(d,(uint64_t)*(uint16_t*)G(s)); NEXT; }
+    op_movzx_rm32: { uint8_t d,s; FETCHREGS(d,s); S(d,(uint64_t)*(uint32_t*)G(s)); NEXT; }
+
+    // ── sized loads (sign-extending) ─────────────────────────────────────────────
+    op_movsx_rm8:  { uint8_t d,s; FETCHREGS(d,s); S(d,(uint64_t)(int64_t)*( int8_t*)G(s)); NEXT; }
+    op_movsx_rm16: { uint8_t d,s; FETCHREGS(d,s); S(d,(uint64_t)(int64_t)*(int16_t*)G(s)); NEXT; }
+    op_movsx_rm32: { uint8_t d,s; FETCHREGS(d,s); S(d,(uint64_t)(int64_t)*(int32_t*)G(s)); NEXT; }
+
+    // ── sized stores (truncating) ─────────────────────────────────────────────────
+    op_mov_mr8:  { uint8_t d,s; FETCHREGS(d,s); *( uint8_t*)G(d) = (uint8_t) G(s); NEXT; }
+    op_mov_mr16: { uint8_t d,s; FETCHREGS(d,s); *(uint16_t*)G(d) = (uint16_t)G(s); NEXT; }
+    op_mov_mr32: { uint8_t d,s; FETCHREGS(d,s); *(uint32_t*)G(d) = (uint32_t)G(s); NEXT; }
+
+    // ── indexed 64-bit ────────────────────────────────────────────────────────────
+    op_mov_rm_off: { uint8_t d,s; FETCHREGS(d,s); int32_t o=FETCH32();
+                     S(d,*(uint64_t*)(G(s)+(uint64_t)(int64_t)o)); NEXT; }
+    op_mov_mr_off: { uint8_t d,s; FETCHREGS(d,s); int32_t o=FETCH32();
+                     *(uint64_t*)(G(d)+(uint64_t)(int64_t)o) = G(s); NEXT; }
+
+    // ── indexed sized loads (zero-extending) ─────────────────────────────────────
+    op_movzx_rm8_off:  { uint8_t d,s; FETCHREGS(d,s); int32_t o=FETCH32();
+                          S(d,(uint64_t)*( uint8_t*)(G(s)+(uint64_t)(int64_t)o)); NEXT; }
+    op_movzx_rm16_off: { uint8_t d,s; FETCHREGS(d,s); int32_t o=FETCH32();
+                          S(d,(uint64_t)*(uint16_t*)(G(s)+(uint64_t)(int64_t)o)); NEXT; }
+    op_movzx_rm32_off: { uint8_t d,s; FETCHREGS(d,s); int32_t o=FETCH32();
+                          S(d,(uint64_t)*(uint32_t*)(G(s)+(uint64_t)(int64_t)o)); NEXT; }
+
+    // ── indexed sized loads (sign-extending) ─────────────────────────────────────
+    op_movsx_rm8_off:  { uint8_t d,s; FETCHREGS(d,s); int32_t o=FETCH32();
+                          S(d,(uint64_t)(int64_t)*( int8_t*)(G(s)+(uint64_t)(int64_t)o)); NEXT; }
+    op_movsx_rm16_off: { uint8_t d,s; FETCHREGS(d,s); int32_t o=FETCH32();
+                          S(d,(uint64_t)(int64_t)*(int16_t*)(G(s)+(uint64_t)(int64_t)o)); NEXT; }
+    op_movsx_rm32_off: { uint8_t d,s; FETCHREGS(d,s); int32_t o=FETCH32();
+                          S(d,(uint64_t)(int64_t)*(int32_t*)(G(s)+(uint64_t)(int64_t)o)); NEXT; }
+
+    // ── indexed sized stores ─────────────────────────────────────────────────────
+    op_mov_mr8_off:  { uint8_t d,s; FETCHREGS(d,s); int32_t o=FETCH32();
+                        *( uint8_t*)(G(d)+(uint64_t)(int64_t)o) = (uint8_t) G(s); NEXT; }
+    op_mov_mr16_off: { uint8_t d,s; FETCHREGS(d,s); int32_t o=FETCH32();
+                        *(uint16_t*)(G(d)+(uint64_t)(int64_t)o) = (uint16_t)G(s); NEXT; }
+    op_mov_mr32_off: { uint8_t d,s; FETCHREGS(d,s); int32_t o=FETCH32();
+                        *(uint32_t*)(G(d)+(uint64_t)(int64_t)o) = (uint32_t)G(s); NEXT; }
+
+    // ── indirect call ─────────────────────────────────────────────────────────────
+    // callr dst, err_off:i32 — ip = GPR[dst]; ok=ip-after-fetch pushed on shadow stack
+    op_callr: {
+        uint8_t d,s; FETCHREGS(d,s); (void)s;
+        int32_t err_off = FETCH32();
+        uint64_t target = G(d);
+        spush((uint64_t)(bytecode + (uint32_t)err_off));  // err, deeper
+        spush(IP);                                        // ok = return addr
+        IP = target;
+        NEXT;
+    }
+
+    // ── dynamic stack ─────────────────────────────────────────────────────────────
+    // alloca: sp -= (ax rounded up to multiple of 8), ax = new sp (ptr to block)
+    op_alloca: {
+        uint64_t sz = (rf->gpr.ax + 7) & ~(uint64_t)7;   // round up to 8
+        rf->sp -= sz;
+        rf->gpr.ax = rf->sp;
+        NEXT;
+    }
+
+    // ── load effective address ────────────────────────────────────────────────────
+    // lea dst, [base+off] — dst = GPR[base] + sign-extended imm32
+    op_lea: {
+        uint8_t d,s; FETCHREGS(d,s);
+        int32_t off = FETCH32();
+        S(d, G(s) + (uint64_t)(int64_t)off);
+        NEXT;
+    }
+
+    // ── truncation ────────────────────────────────────────────────────────────────
+    op_trunc8:  { uint8_t d,s; FETCHREGS(d,s); (void)s; S(d, G(d) & 0xFF);         NEXT; }
+    op_trunc16: { uint8_t d,s; FETCHREGS(d,s); (void)s; S(d, G(d) & 0xFFFF);       NEXT; }
+    op_trunc32: { uint8_t d,s; FETCHREGS(d,s); (void)s; S(d, G(d) & 0xFFFFFFFF);   NEXT; }
 
     op_halt:
         dvm_munmap(vm_stack, stack_size);

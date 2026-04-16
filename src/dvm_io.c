@@ -19,6 +19,7 @@ static int fw_sec(FILE *f, const char *tag, const uint8_t *d, size_t len) {
 
 int dvm_write(FILE *f, const DvmProg *p) {
     if (fwrite(DVM_MAGIC,1,4,f)!=4) return 0;
+    if (!fw_tag(f,DVM_TAG_ENTR) || !fw_u32(f,p->entry_offset)) return 0;
     if (!fw_sec(f,DVM_TAG_CNST,p->cnst,p->cnst_len)) return 0;
     if (!fw_sec(f,DVM_TAG_DATA,p->data,p->data_len)) return 0;
     if (!fw_sec(f,DVM_TAG_CODE,p->code,p->code_len)) return 0;
@@ -87,6 +88,10 @@ int dvm_read(FILE *f, DvmProg *prog) {
     if (fread(magic,1,4,f)!=4 || memcmp(magic,DVM_MAGIC,4)) {
         fputs("dvm: bad magic\n",stderr); return 0;
     }
+
+    if (!fr_expect_tag(f,DVM_TAG_ENTR)) return 0;
+    if (!fr_u32(f,&prog->entry_offset)) return 0;
+    prog->has_entry = 1;
 
     if (!fr_expect_tag(f,DVM_TAG_CNST)) return 0;
     if (!(prog->cnst=fr_section(f,&prog->cnst_len))) return 0;
@@ -184,7 +189,7 @@ int dvm_load(const DvmProg *prog, DvmLoaded *out) {
             dvm_unload(out); return 0;
         }
         if (r->kind == DVM_REL_CODE) {
-            // 4-byte absolute code offset
+            // actually: offset within code section
             uint32_t code_off = s->offset;
             memcpy(out->code + r->code_offset, &code_off, 4);
         } else {
@@ -193,6 +198,9 @@ int dvm_load(const DvmProg *prog, DvmLoaded *out) {
             memcpy(out->code + r->code_offset, &target, 8);
         }
     }
+
+    // Copy entry point
+    out->entry_offset = prog->entry_offset;
 
     // Protect
     if (out->cnst) dvm_mprotect(out->cnst,out->cnst_len,DVM_MMAP_READ);

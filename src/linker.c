@@ -51,7 +51,7 @@ static int32_t msyms_add(MergedSyms *ms, const DvmSym *s) {
     return (int32_t)ms->nsyms++;
 }
 
-int dvm_link(const DvmProg *objs, size_t nobjs, DvmProg *out) {
+int dvm_link(const DvmProg *objs, size_t nobjs, DvmProg *out, const char *entry_sym) {
     memset(out, 0, sizeof(*out));
 
     // ── Pass 1: measure merged section sizes ──────────────────────────────────
@@ -179,11 +179,31 @@ int dvm_link(const DvmProg *objs, size_t nobjs, DvmProg *out) {
     out->nsyms = ms.nsyms;
     memcpy(out->syms, ms.syms, ms.nsyms * sizeof(DvmSym));
 
+    // ── Resolve entry point ───────────────────────────────────────────────────
+    // Priority: explicit entry_sym > _start > main > 0
+    static const char *defaults[] = { "_start", "main", NULL };
+    const char **candidates = defaults;
+    const char *explicit_arr[2] = { entry_sym, NULL };
+    if (entry_sym) candidates = explicit_arr;
+
+    out->entry_offset = 0;
+    out->has_entry    = 0;
+    for (const char **cand = candidates; *cand; cand++) {
+        int32_t idx = msyms_find(&ms, *cand);
+        if (idx >= 0 && ms.syms[idx].section == DVM_SEC_CODE) {
+            out->entry_offset = ms.syms[idx].offset;
+            out->has_entry    = 1;
+            break;
+        }
+    }
+    // If nothing found but we have code, entry_offset stays 0 (start of CODE)
+    if (!out->has_entry && out->code_len > 0) out->has_entry = 1;
+
     free(states);
     return 1;
 }
 
-int dvm_link_files(const char **obj_paths, size_t nobjs, const char *out_path) {
+int dvm_link_files(const char **obj_paths, size_t nobjs, const char *out_path, const char *entry_sym) {
     DvmProg *objs = calloc(nobjs, sizeof(DvmProg));
     int ok = 1;
 
@@ -195,7 +215,7 @@ int dvm_link_files(const char **obj_paths, size_t nobjs, const char *out_path) {
     }
 
     DvmProg linked;
-    if (!dvm_link(objs, nobjs, &linked)) { ok=0; goto done; }
+    if (!dvm_link(objs, nobjs, &linked, entry_sym)) { ok=0; goto done; }
 
     if (!dvm_write_file(out_path, &linked)) {
         fprintf(stderr,"link: failed to write '%s'\n",out_path);
