@@ -9,6 +9,8 @@
 #if defined(_WIN32)
 #  define DVM_WINDOWS
 #  include <windows.h>
+#  include <io.h>       // _isatty, _open, _close, _read, _write
+#  include <fcntl.h>    // _O_RDWR, _O_BINARY, etc.
 #elif defined(__APPLE__)
 #  define DVM_APPLE
 #  include <sys/mman.h>

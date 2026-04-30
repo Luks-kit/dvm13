@@ -6,7 +6,13 @@
 #include <stdlib.h>
 #include <string.h>
 #include <assert.h>
-#include <unistd.h>
+#ifdef _WIN32
+#  include <io.h>      // _open, _close, _chsize
+#  include <fcntl.h>   // _O_RDWR, _O_BINARY
+#else
+#  include <unistd.h>  // truncate
+#endif
+
 
 // ─── Infra ────────────────────────────────────────────────────────────────────
 
