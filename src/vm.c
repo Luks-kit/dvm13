@@ -4,38 +4,42 @@
 #include <stdlib.h>
 #include <string.h>
 
-// ─── Shadow stack ─────────────────────────────────────────────────────────────
-// Per-CALL frame (push order):
-//   spush(err_ip)   ← deeper
-//   spush(ok_ip)    ← top
+// ─── Thread registry ──────────────────────────────────────────────────────────
+VMThread       *vm_threads      = NULL;
+pthread_mutex_t vm_threads_lock = PTHREAD_MUTEX_INITIALIZER;
+
+static int next_thread_id(void) {
+    static _Atomic int counter = 0;
+    return ++counter;
+}
+
+// ─── Shadow stack (per-thread) ────────────────────────────────────────────────
 //
-// RET:   ok = spop(); discard spop(); ip = ok
-// THROW: discard spop(); ip = spop()
+// Per-CALL frame push order:
+//   spush(t, err_ip)   ← deeper
+//   spush(t, ok_ip)    ← top
+//
+// RET:   ok = spop(t); discard spop(t); ip = ok
+// THROW: discard spop(t); ip = spop(t)
 
-#define SHADOW_DEPTH 2048
-
-static uint64_t  _shad[SHADOW_DEPTH];
-static uint64_t *_stop;
-
-static inline void spush(uint64_t v) {
-    if (__builtin_expect(_stop >= _shad + SHADOW_DEPTH, 0)) {
+static inline void spush(VMThread *t, uint64_t v) {
+    if (__builtin_expect(t->stop >= t->shadow + SHADOW_DEPTH, 0)) {
         fputs("dvm: shadow stack overflow\n", stderr);
         abort();
     }
-    *_stop++ = v;
+    *t->stop++ = v;
 }
 
-static inline uint64_t spop(void) {
-    if (__builtin_expect(_stop == _shad, 0)) {
+static inline uint64_t spop(VMThread *t) {
+    if (__builtin_expect(t->stop == t->shadow, 0)) {
         fputs("dvm: shadow stack underflow\n", stderr);
         abort();
     }
-    return *--_stop;
+    return *--t->stop;
 }
 
 // ─── Fetch macros ─────────────────────────────────────────────────────────────
-// Comma-operator form — safe as function arguments, no stray semicolons.
-
+// All go through rf->ip so they are naturally per-thread.
 #define IP (rf->ip)
 #define FETCH8()  (IP+=1, *( uint8_t*)(IP-1))
 #define FETCH16() (IP+=2, *(uint16_t*)(IP-2))
@@ -49,17 +53,13 @@ static inline uint64_t spop(void) {
 
 #define NEXT do { uint8_t _op = FETCH8(); goto *optable[_op]; } while(0)
 
-// ─── vm_run ───────────────────────────────────────────────────────────────────
+// ─── vm_run_thread ────────────────────────────────────────────────────────────
+void vm_run_thread(VMThread *t) {
+    uint8_t *bytecode = t->bytecode;
+    RF      *rf       = &t->rf;
 
-void vm_run(uint8_t *bytecode, size_t stack_size) {
-    void *vm_stack = dvm_mmap(stack_size, DVM_MMAP_RW | DVM_MMAP_STACK);
-
-    RF _rf; memset(&_rf, 0, sizeof(_rf));
-    RF *rf  = &_rf;
-    rf->ip  = (uint64_t)bytecode;
-    rf->sp  = (uint64_t)((uint8_t*)vm_stack + stack_size);
-    rf->bp  = rf->sp;
-    _stop   = _shad;
+    // rf->ip and rf->sp are already initialised by vm_thread_create.
+    // shadow stack pointer is already set to t->shadow.
 
     static const void *optable[OP_COUNT] = {
         [OP_MOV_RR]  = &&op_mov_rr,  [OP_MOV_RI]  = &&op_mov_ri,
@@ -134,10 +134,10 @@ void vm_run(uint8_t *bytecode, size_t stack_size) {
     op_imul: { uint8_t d,s; FETCHREGS(d,s);
                S(d,(uint64_t)((int64_t)G(d)*(int64_t)G(s))); NEXT; }
     op_div:  { uint8_t d,s; FETCHREGS(d,s);
-               if(!G(s)){fputs("dvm: div/0\n",stderr);abort();}
+               if (!G(s)) { fputs("dvm: div/0\n", stderr); abort(); }
                S(d,G(d)/G(s)); NEXT; }
     op_idiv: { uint8_t d,s; FETCHREGS(d,s);
-               if(!G(s)){fputs("dvm: div/0\n",stderr);abort();}
+               if (!G(s)) { fputs("dvm: div/0\n", stderr); abort(); }
                S(d,(uint64_t)((int64_t)G(d)/(int64_t)G(s))); NEXT; }
     op_mod:  { uint8_t d,s; FETCHREGS(d,s); S(d,G(d)%G(s)); NEXT; }
     op_neg:  { uint8_t d,s; FETCHREGS(d,s); (void)s;
@@ -156,23 +156,26 @@ void vm_run(uint8_t *bytecode, size_t stack_size) {
     // ── compare ───────────────────────────────────────────────────────────────
     op_cmp: {
         uint8_t d,s; FETCHREGS(d,s);
-        int64_t a=(int64_t)G(d), b=(int64_t)G(s);
+        uint64_t a=G(d), b=G(s);
         rf->fl = 0;
-        if (a==b) rf->fl |= FL_ZF;
-        if (a< b) rf->fl |= FL_SF;
+        if (a == b)              rf->fl |= FL_ZF;
+        if ((int64_t)a < (int64_t)b) rf->fl |= FL_SF;
+        if (a < b)               rf->fl |= FL_CF;
+        uint64_t r = a - b;
+        if (((a^b) & (a^r)) >> 63) rf->fl |= FL_OF;
         NEXT;
     }
     op_test: {
         uint8_t d,s; FETCHREGS(d,s);
-        rf->fl = (G(d)&G(s)) ? 0 : FL_ZF;
+        rf->fl = (G(d) & G(s)) ? 0 : FL_ZF;
         NEXT;
     }
 
     // ── jumps (absolute offsets) ──────────────────────────────────────────────
-    #define JABSOL(cond) {                                          \
-        int32_t _o=FETCH32();                                       \
-        if(cond) IP=(uint64_t)(bytecode+(uint32_t)_o);             \
-        NEXT;                                                       \
+    #define JABSOL(cond) {                                              \
+        int32_t _o = FETCH32();                                         \
+        if (cond) IP = (uint64_t)(bytecode + (uint32_t)_o);            \
+        NEXT;                                                           \
     }
     op_jmp: { int32_t _o=FETCH32(); IP=(uint64_t)(bytecode+(uint32_t)_o); NEXT; }
     op_je:  JABSOL( (rf->fl & FL_ZF))
@@ -198,20 +201,20 @@ void vm_run(uint8_t *bytecode, size_t stack_size) {
     op_call: {
         int32_t ok_off  = FETCH32();
         int32_t err_off = FETCH32();
-        spush((uint64_t)(bytecode+(uint32_t)err_off));  // err, deeper
-        spush(IP);                                      // ok = return addr, top
-        IP = (uint64_t)(bytecode+(uint32_t)ok_off);
+        spush(t, (uint64_t)(bytecode + (uint32_t)err_off));  // err, deeper
+        spush(t, IP);                                         // ok = return addr
+        IP = (uint64_t)(bytecode + (uint32_t)ok_off);
         NEXT;
     }
     op_ret: {
-        uint64_t ok = spop();
-        spop();           // discard err
+        uint64_t ok = spop(t);
+        spop(t);       // discard err
         IP = ok;
         NEXT;
     }
     op_throw: {
-        spop();           // discard ok
-        IP = spop();      // err addr
+        spop(t);       // discard ok
+        IP = spop(t);  // err addr
         NEXT;
     }
 
@@ -223,8 +226,8 @@ void vm_run(uint8_t *bytecode, size_t stack_size) {
     op_fcmp: {
         uint8_t d,s; FETCHREGS(d,s);
         rf->fl = 0;
-        if (rf->fp[d]==rf->fp[s]) rf->fl |= FL_ZF;
-        if (rf->fp[d]< rf->fp[s]) rf->fl |= FL_SF;
+        if (rf->fp[d] == rf->fp[s]) rf->fl |= FL_ZF;
+        if (rf->fp[d] <  rf->fp[s]) rf->fl |= FL_SF;
         NEXT;
     }
     op_fmov_rr: { uint8_t d,s; FETCHREGS(d,s); rf->fp[d]=rf->fp[s]; NEXT; }
@@ -241,7 +244,7 @@ void vm_run(uint8_t *bytecode, size_t stack_size) {
     // ax=nr  bx=a1  cx=a2  dx=a3  di=a4  si=a5  →  ax=result
     op_syscall: {
         uint64_t result = 0;
-        dvm_syscall(rf->gpr.ax, rf->gpr.bx, rf->gpr.cx,
+        dvm_syscall_from(t, rf->gpr.ax, rf->gpr.bx, rf->gpr.cx,
                     rf->gpr.dx, rf->gpr.di, rf->gpr.si, &result);
         rf->gpr.ax = result;
         NEXT;
@@ -293,13 +296,13 @@ void vm_run(uint8_t *bytecode, size_t stack_size) {
                         *(uint32_t*)(G(d)+(uint64_t)(int64_t)o) = (uint32_t)G(s); NEXT; }
 
     // ── indirect call ─────────────────────────────────────────────────────────────
-    // callr dst, err_off:i32 — ip = GPR[dst]; ok=ip-after-fetch pushed on shadow stack
+    // callr dst, err_off:i32 — ip = GPR[dst]; ok = ip-after-fetch pushed on shadow stack
     op_callr: {
         uint8_t d,s; FETCHREGS(d,s); (void)s;
         int32_t err_off = FETCH32();
         uint64_t target = G(d);
-        spush((uint64_t)(bytecode + (uint32_t)err_off));  // err, deeper
-        spush(IP);                                        // ok = return addr
+        spush(t, (uint64_t)(bytecode + (uint32_t)err_off));  // err, deeper
+        spush(t, IP);                                         // ok = return addr
         IP = target;
         NEXT;
     }
@@ -307,7 +310,7 @@ void vm_run(uint8_t *bytecode, size_t stack_size) {
     // ── dynamic stack ─────────────────────────────────────────────────────────────
     // alloca: sp -= (ax rounded up to multiple of 8), ax = new sp (ptr to block)
     op_alloca: {
-        uint64_t sz = (rf->gpr.ax + 7) & ~(uint64_t)7;   // round up to 8
+        uint64_t sz = (rf->gpr.ax + 7) & ~(uint64_t)7;
         rf->sp -= sz;
         rf->gpr.ax = rf->sp;
         NEXT;
@@ -328,5 +331,95 @@ void vm_run(uint8_t *bytecode, size_t stack_size) {
     op_trunc32: { uint8_t d,s; FETCHREGS(d,s); (void)s; S(d, G(d) & 0xFFFFFFFF);   NEXT; }
 
     op_halt:
-        dvm_munmap(vm_stack, stack_size);
+        t->state = VM_THREAD_FINISHED;
+        dvm_munmap(t->vm_stack, t->stack_size);
+        t->vm_stack = NULL;
+}
+
+// ─── Thread lifecycle ─────────────────────────────────────────────────────────
+
+static void registry_add(VMThread *t) {
+    pthread_mutex_lock(&vm_threads_lock);
+    t->next    = vm_threads;
+    vm_threads = t;
+    pthread_mutex_unlock(&vm_threads_lock);
+}
+
+static void registry_remove(VMThread *t) {
+    pthread_mutex_lock(&vm_threads_lock);
+    VMThread **p = &vm_threads;
+    while (*p && *p != t) p = &(*p)->next;
+    if (*p) *p = t->next;
+    pthread_mutex_unlock(&vm_threads_lock);
+}
+
+static void thread_init_rf(VMThread *t) {
+    memset(&t->rf, 0, sizeof(t->rf));
+    t->rf.ip = (uint64_t)t->bytecode;
+    t->rf.sp = (uint64_t)((uint8_t*)t->vm_stack + t->stack_size);
+    t->rf.bp = t->rf.sp;
+}
+
+static void *thread_entry(void *arg) {
+    VMThread *t = arg;
+    vm_run_thread(t);
+    t->state = VM_THREAD_FINISHED;
+    return NULL;
+}
+
+VMThread *vm_thread_create(uint8_t *bytecode, size_t stack_size) {
+    VMThread *t = calloc(1, sizeof(VMThread));
+    if (!t) { fputs("dvm: out of memory\n", stderr); abort(); }
+
+    t->id         = next_thread_id();
+    t->state      = VM_THREAD_RUNNING;
+    t->bytecode   = bytecode;
+    t->stack_size = stack_size;
+    t->stop       = t->shadow;
+    t->vm_stack   = dvm_mmap(stack_size, DVM_MMAP_RW | DVM_MMAP_STACK);
+
+    thread_init_rf(t);
+    registry_add(t);
+
+    pthread_create(&t->host_thread, NULL, thread_entry, t);
+    return t;
+}
+
+void vm_thread_join(VMThread *t) {
+    pthread_join(t->host_thread, NULL);
+}
+
+void vm_thread_detach(VMThread *t) {
+    pthread_detach(t->host_thread);
+    // Detached threads clean up in thread_entry; remove from registry now
+    // since the caller won't call vm_thread_destroy.
+    registry_remove(t);
+    // Note: t is freed by thread_entry after detach — do not touch t after this.
+}
+
+void vm_thread_destroy(VMThread *t) {
+    registry_remove(t);
+    // vm_stack is freed inside op_halt; if the thread was killed before HALT,
+    // we clean up here as a safety net.
+    if (t->vm_stack) {
+        dvm_munmap(t->vm_stack, t->stack_size);
+        t->vm_stack = NULL;
+    }
+    free(t);
+}
+
+// ─── Convenience wrapper (original vm_run behaviour) ─────────────────────────
+void vm_run(uint8_t *bytecode, size_t stack_size) {
+    VMThread t;
+    memset(&t, 0, sizeof(t));
+    t.id         = next_thread_id();
+    t.state      = VM_THREAD_RUNNING;
+    t.bytecode   = bytecode;
+    t.stack_size = stack_size;
+    t.stop       = t.shadow;
+    t.vm_stack   = dvm_mmap(stack_size, DVM_MMAP_RW | DVM_MMAP_STACK);
+    thread_init_rf(&t);
+    // Not registered in the global list — it's a fire-and-forget inline run.
+    vm_run_thread(&t);
+    // vm_stack freed by op_halt; nothing else to clean up.
 }

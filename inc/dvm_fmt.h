@@ -107,3 +107,4 @@ typedef struct {
     uint8_t  *code;  size_t code_len;  // PROT_READ|EXEC
     uint32_t  entry_offset;            // byte offset in code where execution starts
 } DvmLoaded;
+

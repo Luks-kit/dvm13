@@ -1,5 +1,6 @@
 #include "vm.h"
 #include "asm.h"
+#include "vm_test.h"
 #include "dvm_io.h"
 #include <stdio.h>
 #include <stdlib.h>

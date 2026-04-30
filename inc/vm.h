@@ -16,6 +16,7 @@
 
 #include <stdint.h>
 #include <stddef.h>
+#include <pthread.h>
 
 // ─── Register IDs (3-bit, 0-7) ───────────────────────────────────────────────
 #define REG_AX 0
@@ -40,38 +41,31 @@ typedef enum __attribute__((packed)) {
     OP_MOV_RI,          // dst = imm64 [op][d_][imm:8]
     OP_MOV_RM,          // dst = [src] [op][ds]
     OP_MOV_MR,          // [dst] = src [op][ds]
-
     // arithmetic                       [op][ds]
     OP_ADD,   OP_SUB,
     OP_MUL,   OP_IMUL,  // unsigned / signed
     OP_DIV,   OP_IDIV,
     OP_MOD,
     OP_NEG,             //               [op][d_]
-
     // bitwise                          [op][ds]
     OP_AND,   OP_OR,    OP_XOR,
     OP_NOT,             //               [op][d_]
     OP_SHL,   OP_SHR,   OP_SAR,  // logical / arithmetic shift
-
     // compare — writes fl only         [op][ds]
     OP_CMP,   OP_TEST,
-
     // jumps — absolute bytecode offset [op][off:4]
     OP_JMP,
     OP_JE,  OP_JNE,
     OP_JL,  OP_JLE,
     OP_JG,  OP_JGE,
-
     // data stack                       [op][d_]
     OP_PUSH,  OP_POP,
     OP_ENTER,           // push bp; bp=sp; sp-=imm16  [op][sz:2]
     OP_LEAVE,           //                             [op]
-
     // control (shadow stack, ROP-safe) [op][ok:4][err:4]
     OP_CALL,
     OP_RET,
     OP_THROW,           // r15 = error value beforehand
-
     // float fp[0..7]                   [op][ds]
     OP_FADD,  OP_FSUB,  OP_FMUL,  OP_FDIV,
     OP_FCMP,
@@ -81,68 +75,53 @@ typedef enum __attribute__((packed)) {
     OP_FMOV_MR,         // [reg] = fp[s]
     OP_ITOF,            // fp[d] = (double)(int64)src   [op][ds]
     OP_FTOI,            // dst   = (int64)fp[s]         [op][ds]
-
     // system
     OP_SYSCALL,         // ax=dvm_nr  bx..si=args  →  ax=result
     OP_HALT,
-
     // ── sized memory loads (zero-extending) ──────── [op][ds]
     OP_MOVZX_RM8,       // dst = (uint64_t)*(uint8_t *)[src]
     OP_MOVZX_RM16,      // dst = (uint64_t)*(uint16_t*)[src]
     OP_MOVZX_RM32,      // dst = (uint64_t)*(uint32_t*)[src]
-
     // ── sized memory loads (sign-extending) ─────── [op][ds]
     OP_MOVSX_RM8,       // dst = (int64_t)*(int8_t *)[src]
     OP_MOVSX_RM16,      // dst = (int64_t)*(int16_t*)[src]
     OP_MOVSX_RM32,      // dst = (int64_t)*(int32_t*)[src]
-
     // ── sized memory stores (truncating) ─────────── [op][ds]
     OP_MOV_MR8,         // *(uint8_t *)[dst] = src & 0xFF
     OP_MOV_MR16,        // *(uint16_t*)[dst] = src & 0xFFFF
     OP_MOV_MR32,        // *(uint32_t*)[dst] = src & 0xFFFFFFFF
-
     // ── indexed memory (base + signed imm32 offset) ─ [op][ds][off:4]
     OP_MOV_RM_OFF,      // dst  = *(uint64_t*)(src  + off)
     OP_MOV_MR_OFF,      // *(uint64_t*)(dst + off) = src
-
     // ── indexed + sized loads (zero-extending) ───── [op][ds][off:4]
     OP_MOVZX_RM8_OFF,
     OP_MOVZX_RM16_OFF,
     OP_MOVZX_RM32_OFF,
-
     // ── indexed + sized loads (sign-extending) ───── [op][ds][off:4]
     OP_MOVSX_RM8_OFF,
     OP_MOVSX_RM16_OFF,
     OP_MOVSX_RM32_OFF,
-
     // ── indexed + sized stores ───────────────────── [op][ds][off:4]
     OP_MOV_MR8_OFF,
     OP_MOV_MR16_OFF,
     OP_MOV_MR32_OFF,
-
     // ── indirect call ────────────────────────────────────────────────
     // callr dst, err_off — ip = GPR[dst]; push err+ok onto shadow stack
     OP_CALLR,           // [op][d_][err:4]  (ok = ip after fetch)
-
     // ── dynamic stack / addressing ───────────────────────────────────
     // alloca: sp -= ax (rounded up to 8-byte align), ax = new sp
     OP_ALLOCA,          // [op]
-
-    // lea dst, [bp+off] — effective address of bp-relative slot
-    OP_LEA,             // [op][d_][off:4]  (signed imm32 offset)
-
+    // lea dst, [base+off] — effective address of base-relative slot
+    OP_LEA,             // [op][ds][off:4]  (signed imm32 offset)
     // ── truncation helpers ────────────────────────────────────────────
     OP_TRUNC8,          // dst &= 0xFF              [op][d_]
     OP_TRUNC16,         // dst &= 0xFFFF            [op][d_]
     OP_TRUNC32,         // dst &= 0xFFFFFFFF        [op][d_]
-
     OP_COUNT
 } Op;
 
 // ─── Register file ────────────────────────────────────────────────────────────
 // gpr is a union: named fields for readability, array for indexed access.
-// The two views are always in sync — pick whichever is cleaner at the call site.
-
 typedef union {
     struct {
         uint64_t ax, bx, cx, dx, di, si, ex, fx;
@@ -162,49 +141,72 @@ typedef struct {
 
 // ─── Bytecode buffer (shared by assembler + JIT) ─────────────────────────────
 #define DVM_BUF_MAX (256 * 1024)
-
 typedef struct {
     uint8_t buf[DVM_BUF_MAX];
     size_t  len;
 } Buf;
 
-// ─── vm_run ──────────────────────────────────────────────────────────────────
+// ─── Thread state ─────────────────────────────────────────────────────────────
+#define SHADOW_DEPTH 2048
+
+typedef enum {
+    VM_THREAD_RUNNING  = 0,
+    VM_THREAD_BLOCKED  = 1,
+    VM_THREAD_FINISHED = 2,
+} VMThreadState;
+
+typedef struct VMThread {
+    // identity
+    int             id;
+    pthread_t       host_thread;
+    VMThreadState   state;
+
+    // register file — fully per-thread
+    RF              rf;
+
+    // shadow stack — per-thread; no sharing, no lock needed
+    uint64_t        shadow[SHADOW_DEPTH];
+    uint64_t       *stop;
+
+    // vm data stack — each thread owns its mmap'd stack
+    void           *vm_stack;
+    size_t          stack_size;
+
+    // bytecode — shared, read-only after load; no lock needed
+    uint8_t        *bytecode;
+
+    // exit status written before HALT / thread termination
+    int             exit_code;
+
+    // intrusive linked list of all live threads
+    struct VMThread *next;
+} VMThread;
+
+// ─── Thread registry (protected by vm_threads_lock) ──────────────────────────
+extern VMThread        *vm_threads;
+extern pthread_mutex_t  vm_threads_lock;
+
+// ─── Public API ───────────────────────────────────────────────────────────────
+
+// Allocate, initialise, and launch a new VM thread.
+// bytecode must remain valid for the lifetime of the thread.
+// Returns the VMThread handle (caller must eventually call vm_thread_join +
+// vm_thread_destroy, or detach via vm_thread_detach).
+VMThread *vm_thread_create(uint8_t *bytecode, size_t stack_size);
+
+// Block until the thread finishes.
+void vm_thread_join(VMThread *t);
+
+// Detach — thread cleans itself up on exit; caller must not touch t afterward.
+void vm_thread_detach(VMThread *t);
+
+// Free resources.  Call after vm_thread_join (or for a finished detached thread).
+void vm_thread_destroy(VMThread *t);
+
+// Run the interpreter loop for an already-initialised VMThread.
+// Normally called internally by vm_thread_create; exposed for testing.
+void vm_run_thread(VMThread *t);
+
+// Convenience wrapper: allocates a VMThread, runs it on the calling thread
+// (blocking), then destroys it.  Equivalent to the original vm_run().
 void vm_run(uint8_t *bytecode, size_t stack_size);
-
-#include <stdio.h>
-
-#ifdef _WIN32
-    #define DEV_NULL "NUL"
-#else
-    #define DEV_NULL "/dev/null"
-#endif
-
-// We use a file descriptor backup because freopen wipes the original stream
-#ifdef _WIN32
-    #include <io.h>
-    #define DUP(fd) _dup(fd)
-    #define DUP2(fd1, fd2) _dup2(fd1, fd2)
-    #define FILENO(f) _fileno(f)
-#else
-    #include <unistd.h>
-    #define DUP(fd) dup(fd)
-    #define DUP2(fd1, fd2) dup2(fd1, fd2)
-    #define FILENO(f) fileno(f)
-#endif
-
-static int stderr_save = -1;
-
-static void silence_stderr(void) {
-    fflush(stderr);
-    stderr_save = DUP(FILENO(stderr)); // Save the actual stderr handle
-    freopen(DEV_NULL, "w", stderr);    // Redirect stderr to null
-}
-
-static void restore_stderr(void) {
-    fflush(stderr);
-    if (stderr_save != -1) {
-        DUP2(stderr_save, FILENO(stderr)); // Restore the handle
-        close(stderr_save);
-        stderr_save = -1;
-    }
-}

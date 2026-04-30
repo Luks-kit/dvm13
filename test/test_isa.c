@@ -8,6 +8,7 @@
 #include <assert.h>
 #include <unistd.h>
 
+
 void vm_run(uint8_t *bytecode, size_t stack_size);
 
 // ─── Path resolution (same pattern as test_asm_files.c) ──────────────────────
